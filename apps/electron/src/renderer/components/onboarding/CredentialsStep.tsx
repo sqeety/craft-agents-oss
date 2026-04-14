@@ -37,6 +37,7 @@ interface CredentialsStepProps {
   // Edit mode (pre-fill existing connection values)
   editInitialValues?: {
     apiKey?: string
+    connectionSlug?: string
     baseUrl?: string
     connectionDefaultModel?: string
     activePreset?: string
@@ -267,6 +268,7 @@ export function CredentialsStep({
 
   const apiKeyInputKey = [
     apiSetupMethod,
+    editInitialValues?.connectionSlug ?? '',
     editInitialValues?.activePreset ?? '',
     editInitialValues?.baseUrl ?? '',
     editInitialValues?.connectionDefaultModel ?? '',

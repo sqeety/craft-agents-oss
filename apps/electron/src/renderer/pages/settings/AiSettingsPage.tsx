@@ -566,6 +566,7 @@ export default function AiSettingsPage() {
   const [isDirectEdit, setIsDirectEdit] = useState(false)
   const [editInitialValues, setEditInitialValues] = useState<{
     apiKey?: string
+    connectionSlug?: string
     baseUrl?: string
     connectionDefaultModel?: string
     activePreset?: string
@@ -761,6 +762,7 @@ export default function AiSettingsPage() {
 
     setEditInitialValues({
       apiKey,
+      connectionSlug: connection.slug,
       baseUrl: connection.baseUrl,
       connectionDefaultModel: modelStr,
       activePreset: isCustomEndpointConnection ? 'custom' : (connection.piAuthProvider || undefined),

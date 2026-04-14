@@ -1,4 +1,9 @@
-import { RPC_CHANNELS, type LlmConnectionSetup } from '@craft-agent/shared/protocol'
+import {
+  RPC_CHANNELS,
+  type LlmConnectionSetup,
+  type FetchLlmConnectionModelsParams,
+  type FetchLlmConnectionModelsResult,
+} from '@craft-agent/shared/protocol'
 import { getLlmConnections, getLlmConnection, addLlmConnection, updateLlmConnection, deleteLlmConnection, getDefaultLlmConnection, setDefaultLlmConnection, touchLlmConnection, isCompatProvider, isAnthropicProvider, getDefaultModelsForConnection, getDefaultModelForConnection, type LlmConnection, type LlmConnectionWithStatus, toBedrockNativeId } from '@craft-agent/shared/config'
 import { getCredentialManager } from '@craft-agent/shared/credentials'
 import { setSetupDeferred } from '@craft-agent/shared/config/storage'
@@ -40,10 +45,149 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.copilot.LOGOUT,
   RPC_CHANNELS.settings.SETUP_LLM_CONNECTION,
   RPC_CHANNELS.settings.TEST_LLM_CONNECTION_SETUP,
+  RPC_CHANNELS.settings.FETCH_LLM_CONNECTION_MODELS,
   RPC_CHANNELS.pi.GET_API_KEY_PROVIDERS,
   RPC_CHANNELS.pi.GET_PROVIDER_BASE_URL,
   RPC_CHANNELS.pi.GET_PROVIDER_MODELS,
 ] as const
+
+type RemoteModelOption = {
+  id: string
+  name?: string
+}
+
+function isMaskedCredential(value?: string): boolean {
+  return !!value && value.includes('•')
+}
+
+function buildModelsCandidateUrls(baseUrl: string): string[] {
+  const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, '')
+  const urls = new Set<string>([`${trimmedBaseUrl}/models`])
+
+  try {
+    const parsed = new URL(trimmedBaseUrl)
+    if (!/\/v\d+(?:beta\d*)?$/i.test(parsed.pathname)) {
+      urls.add(`${trimmedBaseUrl}/v1/models`)
+    }
+  } catch {
+    // Ignore invalid URL here; fetch will surface a clearer error later.
+  }
+
+  return [...urls]
+}
+
+function normalizeRemoteModels(payload: unknown): RemoteModelOption[] {
+  const candidateList = Array.isArray(payload)
+    ? payload
+    : (typeof payload === 'object' && payload !== null
+        ? (Array.isArray((payload as { data?: unknown }).data)
+            ? (payload as { data: unknown[] }).data
+            : Array.isArray((payload as { models?: unknown }).models)
+              ? (payload as { models: unknown[] }).models
+              : Array.isArray((payload as { items?: unknown }).items)
+                ? (payload as { items: unknown[] }).items
+                : [])
+        : [])
+
+  const seen = new Set<string>()
+  const models: RemoteModelOption[] = []
+
+  for (const entry of candidateList) {
+    if (typeof entry === 'string') {
+      const id = entry.trim()
+      if (id && !seen.has(id)) {
+        seen.add(id)
+        models.push({ id })
+      }
+      continue
+    }
+
+    if (!entry || typeof entry !== 'object') {
+      continue
+    }
+
+    const id = typeof (entry as { id?: unknown }).id === 'string'
+      ? (entry as { id: string }).id.trim()
+      : ''
+    if (!id || seen.has(id)) {
+      continue
+    }
+
+    const nameCandidate = (entry as { name?: unknown; display_name?: unknown }).name
+      ?? (entry as { display_name?: unknown }).display_name
+    const name = typeof nameCandidate === 'string' ? nameCandidate.trim() : undefined
+
+    seen.add(id)
+    models.push(name ? { id, name } : { id })
+  }
+
+  return models
+}
+
+function buildFetchHeaders(apiKey: string | undefined, protocol: FetchLlmConnectionModelsParams['protocol']): Record<string, string> {
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+  }
+  const trimmedApiKey = apiKey?.trim()
+
+  if (trimmedApiKey) {
+    headers.authorization = `Bearer ${trimmedApiKey}`
+    headers['x-api-key'] = trimmedApiKey
+  }
+
+  if (protocol === 'anthropic-messages') {
+    headers['anthropic-version'] = '2023-06-01'
+  }
+
+  return headers
+}
+
+async function fetchRemoteModelsFromCompatibleEndpoint(
+  params: FetchLlmConnectionModelsParams,
+): Promise<RemoteModelOption[]> {
+  const protocolOrder: Array<FetchLlmConnectionModelsParams['protocol']> = params.protocol === 'anthropic-messages'
+    ? ['anthropic-messages', 'openai-completions']
+    : ['openai-completions', 'anthropic-messages']
+  const urls = buildModelsCandidateUrls(params.baseUrl)
+  const errors: string[] = []
+
+  for (const protocol of protocolOrder) {
+    const headers = buildFetchHeaders(params.apiKey, protocol)
+
+    for (const url of urls) {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 15_000)
+
+      try {
+        const response = await fetch(url, {
+          method: 'GET',
+          headers,
+          signal: controller.signal,
+        })
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => '')
+          errors.push(`${response.status} ${response.statusText}${body ? `: ${body.slice(0, 160)}` : ''}`)
+          continue
+        }
+
+        const payload = await response.json()
+        const models = normalizeRemoteModels(payload)
+        if (models.length > 0) {
+          return models
+        }
+
+        errors.push(`No models returned from ${url}`)
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : String(error))
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+  }
+
+  throw new Error(errors.find(Boolean) || 'Failed to fetch models from endpoint')
+}
 
 export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerDeps): void {
   const { sessionManager } = deps
@@ -321,6 +465,41 @@ export function registerLlmConnectionsHandlers(server: RpcServer, deps: HandlerD
       const msg = error instanceof Error ? error.message : String(error)
       deps.platform.logger?.info(`[testLlmConnectionSetup] Error: ${msg.slice(0, 500)}`)
       return { success: false, error: parseTestConnectionError(msg) }
+    }
+  })
+
+  server.handle(RPC_CHANNELS.settings.FETCH_LLM_CONNECTION_MODELS, async (_ctx, params: FetchLlmConnectionModelsParams): Promise<FetchLlmConnectionModelsResult> => {
+    try {
+      const baseUrl = params.baseUrl?.trim()
+      if (!baseUrl) {
+        return { success: false, models: [], error: 'Endpoint URL is required' }
+      }
+
+      const requestedApiKey = params.apiKey?.trim()
+      const apiKey = requestedApiKey && !isMaskedCredential(requestedApiKey)
+        ? requestedApiKey
+        : (params.connectionSlug
+            ? (await getCredentialManager().getLlmApiKey(params.connectionSlug)) ?? undefined
+            : undefined)
+
+      const models = await fetchRemoteModelsFromCompatibleEndpoint({
+        ...params,
+        apiKey,
+        baseUrl,
+      })
+
+      return {
+        success: true,
+        models,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      deps.platform.logger?.warn(`[fetchLlmConnectionModels] Failed for ${params.baseUrl}: ${message}`)
+      return {
+        success: false,
+        models: [],
+        error: message,
+      }
     }
   })
 

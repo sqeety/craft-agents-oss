@@ -374,6 +374,23 @@ export interface TestLlmConnectionResult {
   error?: string
 }
 
+export interface FetchLlmConnectionModelsParams {
+  apiKey?: string
+  connectionSlug?: string
+  baseUrl: string
+  /** Protocol hint used to choose headers/fallback behavior for compatible endpoints */
+  protocol?: CustomEndpointConfig['api']
+}
+
+export interface FetchLlmConnectionModelsResult {
+  success: boolean
+  models: Array<{
+    id: string
+    name?: string
+  }>
+  error?: string
+}
+
 // ---------------------------------------------------------------------------
 // Source / skill types
 // ---------------------------------------------------------------------------

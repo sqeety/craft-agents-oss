@@ -20,6 +20,13 @@ import { tmpdir } from 'node:os'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { HandlerFn, RequestContext, RpcServer } from '../../transport/types'
 
+export const HANDLED_CHANNELS = [
+  RPC_CHANNELS.transfer.START,
+  RPC_CHANNELS.transfer.CHUNK,
+  RPC_CHANNELS.transfer.COMMIT,
+  RPC_CHANNELS.transfer.ABORT,
+] as const
+
 interface TransferState {
   id: string
   dir: string

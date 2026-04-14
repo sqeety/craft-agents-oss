@@ -73,6 +73,7 @@ export interface ApiKeyInputProps {
   /** Pre-fill values when editing an existing connection */
   initialValues?: {
     apiKey?: string
+    connectionSlug?: string
     baseUrl?: string
     connectionDefaultModel?: string
     activePreset?: string
@@ -161,6 +162,10 @@ function parseModelList(value: string): string[] {
     .filter(Boolean)
 }
 
+function isMaskedCredential(value?: string): boolean {
+  return !!value && value.includes('•')
+}
+
 // ============================================================
 // Pi model tier selection (for providers with many models)
 // ============================================================
@@ -212,6 +217,16 @@ export function ApiKeyInput({
   const [tierDropdownPosition, setTierDropdownPosition] = useState<{ top: number; left: number; width: number } | null>(null)
   const tierFilterInputRef = useRef<HTMLInputElement>(null)
   const hydratedTierProviderRef = useRef<string | null>(null)
+  const [compatModels, setCompatModels] = useState<string[]>(() => initialValues?.models ?? [])
+  const [compatModelsLoading, setCompatModelsLoading] = useState(false)
+  const [compatModelsError, setCompatModelsError] = useState<string | null>(null)
+  const compatModelsSignatureRef = useRef([
+    initialValues?.connectionSlug ?? '',
+    initialPreset,
+    initialValues?.baseUrl ?? defaultPreset.url,
+    initialValues?.customApi ?? 'openai-completions',
+    initialValues?.apiKey ?? '',
+  ].join('::'))
 
   const isDisabled = disabled || status === 'validating'
 
@@ -228,6 +243,14 @@ export function ApiKeyInput({
     : providerType === 'pi' ? 'pi-...'
     : providerType === 'openai' ? 'sk-...'
     : 'Paste your key here...')
+  const compatModelProtocol = activePreset === 'custom' ? customApi : 'openai-completions'
+  const compatModelsSignature = [
+    initialValues?.connectionSlug ?? '',
+    activePreset,
+    baseUrl.trim(),
+    compatModelProtocol,
+    apiKey.trim(),
+  ].join('::')
 
   // Fetch Pi SDK models when a provider is selected in pi_api_key flow.
   // Returns all models sorted by cost (expensive-first) for the searchable tier dropdowns.
@@ -260,8 +283,65 @@ export function ApiKeyInput({
     loadPiModels(activePreset)
   }, [activePreset, loadPiModels])
 
+  useEffect(() => {
+    if (compatModelsSignatureRef.current === compatModelsSignature) {
+      return
+    }
+
+    compatModelsSignatureRef.current = compatModelsSignature
+    setCompatModels([])
+    setCompatModelsError(null)
+  }, [compatModelsSignature])
+
   // Whether to show 3 tier dropdowns instead of text input
   const hasPiModels = isPiApiKeyFlow && piModels.length > 0 && !isDefaultProviderPreset && activePreset !== 'custom' && !isBedrock
+
+  const loadCompatModels = useCallback(async () => {
+    const effectiveBaseUrl = baseUrl.trim()
+    if (!effectiveBaseUrl) {
+      setCompatModelsError('Enter an endpoint URL before fetching models.')
+      return
+    }
+
+    setCompatModelsLoading(true)
+    setCompatModelsError(null)
+
+    try {
+      const result = await window.electronAPI.fetchLlmConnectionModels({
+        apiKey: (() => {
+          const trimmed = apiKey.trim()
+          return trimmed && !isMaskedCredential(trimmed) ? trimmed : undefined
+        })(),
+        connectionSlug: initialValues?.connectionSlug,
+        baseUrl: effectiveBaseUrl,
+        protocol: compatModelProtocol,
+      })
+
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch models from the endpoint.')
+      }
+
+      if (result.models.length === 0) {
+        throw new Error('The endpoint returned no models.')
+      }
+
+      const sortedModelIds = [...new Set(
+        result.models
+          .map((model) => model.id.trim())
+          .filter(Boolean)
+      )].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
+
+      setCompatModels(sortedModelIds)
+      setModelError(null)
+      setConnectionDefaultModel(sortedModelIds.join(', '))
+    } catch (err) {
+      console.error('[ApiKeyInput] Failed to fetch endpoint models', err)
+      setCompatModels([])
+      setCompatModelsError(err instanceof Error ? err.message : 'Failed to fetch models from the endpoint.')
+    } finally {
+      setCompatModelsLoading(false)
+    }
+  }, [apiKey, baseUrl, compatModelProtocol, connectionDefaultModel])
 
   const handlePresetSelect = (preset: Preset) => {
     setActivePreset(preset.key)
@@ -319,6 +399,7 @@ export function ApiKeyInput({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    const sanitizedApiKey = isMaskedCredential(apiKey.trim()) ? '' : apiKey.trim()
 
     const effectivePiAuthProvider = isPiApiKeyFlow
       ? resolvePiAuthProviderForSubmit(activePreset, lastNonCustomPreset)
@@ -332,7 +413,7 @@ export function ApiKeyInput({
       }
       const models: string[] = [bestModel, defaultModel, cheapModel]
       onSubmit({
-        apiKey: apiKey.trim(),
+        apiKey: sanitizedApiKey,
         baseUrl: baseUrl.trim() || undefined,
         connectionDefaultModel: bestModel,
         models,
@@ -375,10 +456,11 @@ export function ApiKeyInput({
     const effectiveBaseUrl = baseUrl.trim()
 
     const parsedModels = parseModelList(connectionDefaultModel)
+    const effectiveModels = parsedModels.length > 0 ? parsedModels : compatModels.filter(Boolean)
 
     const isUsingDefaultEndpoint = isDefaultProviderPreset || !effectiveBaseUrl
     const requiresModel = !isDefaultProviderPreset && !!effectiveBaseUrl
-    if (requiresModel && parsedModels.length === 0) {
+    if (requiresModel && effectiveModels.length === 0) {
       setModelError('Default model is required for custom endpoints.')
       return
     }
@@ -391,13 +473,15 @@ export function ApiKeyInput({
       : effectivePiAuthProvider
 
     onSubmit({
-      apiKey: apiKey.trim(),
+      apiKey: sanitizedApiKey,
       baseUrl: isUsingDefaultEndpoint ? undefined : effectiveBaseUrl,
-      connectionDefaultModel: parsedModels[0],
-      models: parsedModels.length > 0 ? parsedModels : undefined,
+      connectionDefaultModel: effectiveModels[0],
+      models: effectiveModels.length > 0 ? effectiveModels : undefined,
       piAuthProvider: resolvedPiAuthProvider,
       modelSelectionMode: isPiApiKeyFlow
-        ? (parsedModels.length > 0 ? 'userDefined3Tier' : 'automaticallySyncedFromProvider')
+        ? (compatModels.length > 0
+            ? 'automaticallySyncedFromProvider'
+            : (parsedModels.length > 0 ? 'userDefined3Tier' : 'automaticallySyncedFromProvider'))
         : undefined,
       customEndpoint,
     })
@@ -772,29 +856,49 @@ export function ApiKeyInput({
               · {!isBedrock && baseUrl.trim() ? 'required' : 'optional'}
             </span>
           </Label>
-          <div className={cn(
-            "rounded-md shadow-minimal transition-colors",
-            "bg-foreground-2 focus-within:bg-background",
-            modelError && "ring-1 ring-destructive/40"
-          )}>
-            <Input
-              id="connection-default-model"
-              type="text"
-              value={connectionDefaultModel}
-              onChange={(e) => {
-                setConnectionDefaultModel(e.target.value)
-                setModelError(null)
-              }}
-              placeholder="e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5"
-              className="border-0 bg-transparent shadow-none"
-              disabled={isDisabled}
-            />
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "flex-1 rounded-md shadow-minimal transition-colors",
+              "bg-foreground-2 focus-within:bg-background",
+              modelError && "ring-1 ring-destructive/40"
+            )}>
+              <Input
+                id="connection-default-model"
+                type="text"
+                value={connectionDefaultModel}
+                onChange={(e) => {
+                  setConnectionDefaultModel(e.target.value)
+                  setModelError(null)
+                }}
+                placeholder="e.g. claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5"
+                className="border-0 bg-transparent shadow-none"
+                disabled={isDisabled}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={loadCompatModels}
+              disabled={isDisabled || !baseUrl.trim() || compatModelsLoading}
+              className={cn(
+                "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md px-3 text-xs font-medium",
+                "bg-background shadow-minimal transition-colors hover:bg-foreground/5",
+                "disabled:cursor-not-allowed disabled:opacity-50"
+              )}
+            >
+              {compatModelsLoading ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {compatModelsLoading ? 'Loading...' : 'Fetch Models'}
+            </button>
           </div>
           {modelError && (
             <p className="text-xs text-destructive">{modelError}</p>
           )}
+          {compatModelsError && (
+            <p className="text-xs text-destructive">{compatModelsError}</p>
+          )}
           <p className="text-xs text-foreground/30">
-            Comma-separated list. The first model is the default. The last is used for summarization.
+            {compatModels.length > 0
+              ? `Loaded ${compatModels.length} models and filled the input with a sorted comma-separated list.`
+              : 'Click Fetch Models to load the endpoint model list into this input, or enter a comma-separated list manually.'}
           </p>
           {(activePreset === 'custom' || !activePreset) && (
             <p className="text-xs text-foreground/30">

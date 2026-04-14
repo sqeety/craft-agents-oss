@@ -20,12 +20,16 @@ export interface ModelOption {
 }
 
 export interface SearchableModelInputProps {
+  /** Input element id */
+  inputId?: string
   /** Current value */
   value: string
   /** Change handler */
   onChange: (value: string) => void
   /** Blur handler (for saving) */
   onBlur?: () => void
+  /** Disable the input */
+  disabled?: boolean
   /** Placeholder text */
   placeholder?: string
   /** Available models to choose from */
@@ -41,9 +45,11 @@ export interface SearchableModelInputProps {
 }
 
 export function SearchableModelInput({
+  inputId,
   value,
   onChange,
   onBlur,
+  disabled,
   placeholder = 'e.g., claude-sonnet-4-6',
   models,
   isLoading,
@@ -96,10 +102,12 @@ export function SearchableModelInput({
   return (
     <div className={cn('relative', className)}>
       <Input
+        id={inputId}
         placeholder={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
+        disabled={disabled}
         className="pr-12"
       />
       <Popover open={isOpen} onOpenChange={handleOpenChange}>

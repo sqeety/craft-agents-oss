@@ -69,6 +69,7 @@ interface OnboardingWizardProps {
   // Edit mode (pre-fill existing connection values)
   editInitialValues?: {
     apiKey?: string
+    connectionSlug?: string
     baseUrl?: string
     connectionDefaultModel?: string
     activePreset?: string
