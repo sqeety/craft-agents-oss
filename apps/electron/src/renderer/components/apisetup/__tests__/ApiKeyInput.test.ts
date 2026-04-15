@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test'
+import { CUSTOM_ENDPOINT_PROTOCOL_OPTIONS } from '../custom-endpoint-protocols'
 import {
   resolvePiAuthProviderForSubmit,
   resolvePresetStateForBaseUrlChange,
@@ -57,6 +58,16 @@ describe('resolvePiAuthProviderForSubmit', () => {
 
   it('passes through non-custom presets unchanged', () => {
     expect(resolvePiAuthProviderForSubmit('google', 'anthropic')).toBe('google')
+  })
+})
+
+describe('CUSTOM_ENDPOINT_PROTOCOL_OPTIONS', () => {
+  it('includes OpenAI Responses while preserving chat completions as the default-first option', () => {
+    expect(CUSTOM_ENDPOINT_PROTOCOL_OPTIONS).toEqual([
+      { value: 'openai-completions', label: 'OpenAI Chat Completions' },
+      { value: 'openai-responses', label: 'OpenAI Responses' },
+      { value: 'anthropic-messages', label: 'Anthropic Messages' },
+    ])
   })
 })
 

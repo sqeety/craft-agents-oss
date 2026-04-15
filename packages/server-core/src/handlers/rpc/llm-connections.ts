@@ -146,8 +146,10 @@ async function fetchRemoteModelsFromCompatibleEndpoint(
   params: FetchLlmConnectionModelsParams,
 ): Promise<RemoteModelOption[]> {
   const protocolOrder: Array<FetchLlmConnectionModelsParams['protocol']> = params.protocol === 'anthropic-messages'
-    ? ['anthropic-messages', 'openai-completions']
-    : ['openai-completions', 'anthropic-messages']
+    ? ['anthropic-messages', 'openai-completions', 'openai-responses']
+    : params.protocol === 'openai-responses'
+      ? ['openai-responses', 'openai-completions', 'anthropic-messages']
+      : ['openai-completions', 'openai-responses', 'anthropic-messages']
   const urls = buildModelsCandidateUrls(params.baseUrl)
   const errors: string[] = []
 

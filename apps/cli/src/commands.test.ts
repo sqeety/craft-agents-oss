@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import { parseArgs } from './index.ts'
+import { buildCliCustomEndpointSetupPayload, parseArgs, resolveCliCustomEndpointProtocol } from './index.ts'
 
 // ---------------------------------------------------------------------------
 // Arg parsing tests
@@ -52,20 +52,32 @@ describe('parseArgs', () => {
     expect(args.rest).toEqual(['session-1', 'hello'])
   })
 
+  it('parses --protocol for custom endpoints', () => {
+    const args = parseArgs([
+      'bun', 'index.ts',
+      '--protocol', 'openai-responses',
+      'run', 'hello',
+    ])
+    expect(args.protocol).toBe('openai-responses')
+  })
+
   it('falls back to env vars for url and token', () => {
     const prevUrl = process.env.CRAFT_SERVER_URL
     const prevToken = process.env.CRAFT_SERVER_TOKEN
     const prevCa = process.env.CRAFT_TLS_CA
+    const prevProtocol = process.env.LLM_PROTOCOL
 
     process.env.CRAFT_SERVER_URL = 'ws://env-server:8080'
     process.env.CRAFT_SERVER_TOKEN = 'env-token'
     process.env.CRAFT_TLS_CA = '/env/ca.pem'
+    process.env.LLM_PROTOCOL = 'openai-responses'
 
     try {
       const args = parseArgs(['bun', 'index.ts', 'ping'])
       expect(args.url).toBe('ws://env-server:8080')
       expect(args.token).toBe('env-token')
       expect(args.tlsCa).toBe('/env/ca.pem')
+      expect(args.protocol).toBe('openai-responses')
     } finally {
       if (prevUrl === undefined) delete process.env.CRAFT_SERVER_URL
       else process.env.CRAFT_SERVER_URL = prevUrl
@@ -73,6 +85,8 @@ describe('parseArgs', () => {
       else process.env.CRAFT_SERVER_TOKEN = prevToken
       if (prevCa === undefined) delete process.env.CRAFT_TLS_CA
       else process.env.CRAFT_TLS_CA = prevCa
+      if (prevProtocol === undefined) delete process.env.LLM_PROTOCOL
+      else process.env.LLM_PROTOCOL = prevProtocol
     }
   })
 
@@ -224,6 +238,43 @@ describe('parseArgs', () => {
   it('defaults workspaceDir to undefined', () => {
     const args = parseArgs(['bun', 'index.ts', 'run', 'hello'])
     expect(args.workspaceDir).toBeUndefined()
+  })
+})
+
+describe('resolveCliCustomEndpointProtocol', () => {
+  it('defaults to openai-completions when protocol is omitted', () => {
+    expect(resolveCliCustomEndpointProtocol(undefined)).toBe('openai-completions')
+  })
+
+  it('preserves explicit openai-responses selection', () => {
+    expect(resolveCliCustomEndpointProtocol('openai-responses')).toBe('openai-responses')
+  })
+})
+
+describe('buildCliCustomEndpointSetupPayload', () => {
+  it('defaults custom endpoint setup payloads to chat completions', () => {
+    expect(buildCliCustomEndpointSetupPayload({
+      slug: 'openai-cli',
+      credential: 'sk-test',
+      provider: 'openai',
+      baseUrl: 'https://example.com/v1',
+    })).toEqual({
+      slug: 'openai-cli',
+      credential: 'sk-test',
+      baseUrl: 'https://example.com/v1',
+      customEndpoint: { api: 'openai-completions' },
+      defaultModel: 'gpt-4o',
+    })
+  })
+
+  it('uses openai-responses when explicitly requested', () => {
+    expect(buildCliCustomEndpointSetupPayload({
+      slug: 'openai-cli',
+      credential: 'sk-test',
+      provider: 'openai',
+      baseUrl: 'https://example.com/v1',
+      protocol: 'openai-responses',
+    }).customEndpoint).toEqual({ api: 'openai-responses' })
   })
 })
 

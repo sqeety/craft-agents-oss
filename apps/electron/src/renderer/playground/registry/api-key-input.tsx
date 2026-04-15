@@ -58,6 +58,18 @@ export const apiKeyInputComponents: ComponentEntry[] = [
         },
       },
       {
+        name: 'Empty (OpenAI responses)',
+        description: 'Custom preset, OpenAI Responses protocol selected',
+        props: {
+          providerType: 'pi_api_key',
+          initialValues: {
+            activePreset: 'custom',
+            baseUrl: 'https://your-endpoint.com/v1',
+            customApi: 'openai-responses',
+          },
+        },
+      },
+      {
         name: 'Alibaba DashScope (OpenAI)',
         description: 'Alibaba/Qwen endpoint — OpenAI compatible with 3 models',
         props: {

@@ -29,6 +29,7 @@ import {
   resolvePresetStateForBaseUrlChange,
   type PresetKey,
 } from "./submit-helpers"
+import { CUSTOM_ENDPOINT_PROTOCOL_OPTIONS } from "./custom-endpoint-protocols"
 
 import type { CustomEndpointApi, CustomEndpointConfig } from '@config/llm-connections'
 
@@ -587,10 +588,7 @@ export function ApiKeyInput({
             "bg-foreground-2",
             isDisabled && "opacity-50 pointer-events-none"
           )}>
-            {([
-              { value: 'openai-completions' as const, label: 'OpenAI Compatible' },
-              { value: 'anthropic-messages' as const, label: 'Anthropic Compatible' },
-            ]).map(({ value, label }) => (
+            {CUSTOM_ENDPOINT_PROTOCOL_OPTIONS.map(({ value, label }) => (
               <button
                 key={value}
                 type="button"
@@ -608,7 +606,7 @@ export function ApiKeyInput({
             ))}
           </div>
           <p className="text-xs text-foreground/30">
-            Most third-party APIs (Ollama, vLLM, DashScope) use OpenAI Compatible.
+            Most third-party APIs use OpenAI Chat Completions; choose OpenAI Responses only when the endpoint explicitly supports it.
           </p>
         </div>
       )}

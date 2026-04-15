@@ -14,6 +14,49 @@ import { CliRpcClient } from './client.ts'
 // Arg parsing
 // ---------------------------------------------------------------------------
 
+export type CliCustomEndpointProtocol = 'openai-completions' | 'openai-responses' | 'anthropic-messages'
+
+const CLI_CUSTOM_ENDPOINT_PROTOCOLS = new Set<CliCustomEndpointProtocol>([
+  'openai-completions',
+  'openai-responses',
+  'anthropic-messages',
+])
+
+export function parseCliCustomEndpointProtocol(value?: string): CliCustomEndpointProtocol | undefined {
+  if (!value) return undefined
+  return CLI_CUSTOM_ENDPOINT_PROTOCOLS.has(value as CliCustomEndpointProtocol)
+    ? value as CliCustomEndpointProtocol
+    : undefined
+}
+
+export function resolveCliCustomEndpointProtocol(protocol?: CliCustomEndpointProtocol): CliCustomEndpointProtocol {
+  return protocol ?? 'openai-completions'
+}
+
+export function buildCliCustomEndpointSetupPayload(args: {
+  slug: string
+  credential: string
+  provider: string
+  baseUrl: string
+  protocol?: CliCustomEndpointProtocol
+}): {
+  slug: string
+  credential: string
+  baseUrl: string
+  customEndpoint: { api: CliCustomEndpointProtocol }
+  defaultModel: string
+} {
+  return {
+    slug: args.slug,
+    credential: args.credential,
+    baseUrl: args.baseUrl,
+    customEndpoint: {
+      api: resolveCliCustomEndpointProtocol(args.protocol),
+    },
+    defaultModel: args.provider === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o',
+  }
+}
+
 export interface CliArgs {
   url: string
   token: string
@@ -38,6 +81,7 @@ export interface CliArgs {
   model: string
   apiKey: string
   baseUrl: string
+  protocol?: CliCustomEndpointProtocol
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -63,6 +107,7 @@ export function parseArgs(argv: string[]): CliArgs {
   let model = ''
   let apiKey = ''
   let baseUrl = ''
+  let protocol: CliCustomEndpointProtocol | undefined
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -126,6 +171,9 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--base-url':
         baseUrl = args[++i] ?? ''
         break
+      case '--protocol':
+        protocol = parseCliCustomEndpointProtocol(args[++i])
+        break
       case '--help':
       case '-h':
         command = 'help'
@@ -153,8 +201,9 @@ export function parseArgs(argv: string[]): CliArgs {
   if (!model) model = process.env.LLM_MODEL ?? ''
   if (!apiKey) apiKey = process.env.LLM_API_KEY ?? ''
   if (!baseUrl) baseUrl = process.env.LLM_BASE_URL ?? ''
+  if (!protocol) protocol = parseCliCustomEndpointProtocol(process.env.LLM_PROTOCOL)
 
-  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl }
+  return { url, token, workspace, timeout, json, tlsCa, sendTimeout, command, rest, sources, mode, outputFormat, noCleanup, noSpinner, verbose, serverEntry, workspaceDir, provider, model, apiKey, baseUrl, protocol }
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +588,7 @@ async function setupLlmConnection(
   client: CliRpcClient,
   args: CliArgs,
 ): Promise<{ connectionSlug: string }> {
-  const { provider, baseUrl } = args
+  const { provider, baseUrl, protocol } = args
   const key = resolveApiKey(provider, args.apiKey)
   const connectionSlug = `${provider}-cli`
 
@@ -553,11 +602,13 @@ async function setupLlmConnection(
     // and sets providerType='pi_compat', piAuthProvider, etc.
     providerType = 'pi_compat'
     authType = 'api_key_with_endpoint'
-    setupPayload.baseUrl = baseUrl
-    setupPayload.customEndpoint = {
-      api: provider === 'anthropic' ? 'anthropic-messages' : 'openai-completions',
-    }
-    setupPayload.defaultModel = provider === 'anthropic' ? 'claude-sonnet-4-6' : 'gpt-4o'
+    Object.assign(setupPayload, buildCliCustomEndpointSetupPayload({
+      slug: connectionSlug,
+      credential: key,
+      provider,
+      baseUrl,
+      protocol,
+    }))
   } else if (provider === 'anthropic') {
     providerType = 'anthropic'
     authType = 'api_key'
@@ -712,6 +763,7 @@ async function cmdValidate(args: CliArgs): Promise<void> {
   try {
     const exitCode = await runValidation(client, args.json, args.noSpinner, args.workspaceDir, {
       baseUrl: args.baseUrl,
+      protocol: args.protocol,
       apiKey: args.apiKey,
       provider: args.provider,
     })
@@ -794,6 +846,8 @@ export interface ValidateContext {
   workspaceDir?: string
   /** Custom endpoint URL (from --base-url) */
   baseUrl?: string
+  /** Custom endpoint protocol (from --protocol) */
+  protocol?: CliCustomEndpointProtocol
   /** API key override (from --api-key) */
   apiKey?: string
   /** Provider hint (from --provider, default 'anthropic') */
@@ -1055,7 +1109,6 @@ export function getValidateSteps(): ValidateStep[] {
           const provider = ctx.provider || 'anthropic'
           const key = ctx.apiKey || process.env.ANTHROPIC_API_KEY || ''
           const slug = `${provider}-cli`
-          const isAnthropicApi = provider === 'anthropic'
           await client.invoke('LLM_Connection:save', {
             slug,
             name: `${provider.charAt(0).toUpperCase() + provider.slice(1)} (Custom Endpoint)`,
@@ -1063,13 +1116,13 @@ export function getValidateSteps(): ValidateStep[] {
             authType: 'api_key_with_endpoint',
             createdAt: Date.now(),
           })
-          const result = await client.invoke('settings:setupLlmConnection', {
+          const result = await client.invoke('settings:setupLlmConnection', buildCliCustomEndpointSetupPayload({
             slug,
             credential: key,
+            provider,
             baseUrl: ctx.baseUrl,
-            customEndpoint: { api: isAnthropicApi ? 'anthropic-messages' : 'openai-completions' },
-            defaultModel: isAnthropicApi ? 'claude-sonnet-4-6' : 'gpt-4o',
-          }) as { success: boolean; error?: string }
+            protocol: ctx.protocol,
+          })) as { success: boolean; error?: string }
           if (!result?.success) return `setup failed: ${result?.error ?? 'unknown'}`
           await client.invoke('LLM_Connection:setDefault', slug)
           return `${r?.length ?? 0} existing + custom endpoint via ${ctx.baseUrl}`
@@ -1869,6 +1922,8 @@ LLM Configuration (for 'run' command):
   --model <id>           Model to use (or $LLM_MODEL)
   --api-key <key>        API key (or $LLM_API_KEY, or provider-specific e.g. $OPENAI_API_KEY)
   --base-url <url>       Custom API endpoint (or $LLM_BASE_URL)
+  --protocol <name>      Custom endpoint protocol: openai-completions, openai-responses,
+                         or anthropic-messages (or $LLM_PROTOCOL)
 
 Commands:
   run <message>          Spawn server, send message, stream response, exit
@@ -1900,6 +1955,7 @@ Examples:
   craft-cli run --source craft-kb "Summarize today's daily note"
   craft-cli run --workspace-dir .github/agents --source craft-public "Read the doc"
   craft-cli run --provider openai --model gpt-4o "Summarize this repo"
+  craft-cli run --provider openai --base-url https://api.openai.com/v1 --protocol openai-responses "Hello"
   OPENAI_API_KEY=sk-... craft-cli run --provider openai "Hello"
   GOOGLE_API_KEY=... craft-cli run --provider google --model gemini-2.0-flash "Hello"
   echo "Analyze this code" | craft-cli run
