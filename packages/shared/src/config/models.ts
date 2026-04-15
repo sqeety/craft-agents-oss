@@ -235,7 +235,7 @@ export function getModelShortName(modelId: string): string {
   const parts = stripped.split('-');
   const first = parts[0];
   if (!first) return modelId;
-  const name = first.charAt(0).toUpperCase() + first.slice(1);
+  const name = first;
   const version = parts.slice(1).join('.');
   return version ? `${name} ${version}` : name;
 }
