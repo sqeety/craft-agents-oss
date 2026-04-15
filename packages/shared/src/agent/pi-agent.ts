@@ -302,7 +302,12 @@ export class PiAgent extends BaseAgent {
       throw new Error('piServerPath not configured. Cannot spawn Pi subprocess.');
     }
 
-    const nodePath = runtime.paths?.node || process.execPath;
+    const nodePath = runtime.paths?.node || (process.versions?.bun ? process.execPath : undefined);
+    if (!nodePath) {
+      throw new Error(
+        'Bun runtime not found. Cannot spawn Pi subprocess. Ensure Bun is installed or bundled before starting Pi sessions.',
+      );
+    }
     const cwd = this.resolvedCwd();
 
     this.debug(`Spawning Pi subprocess: ${nodePath} ${piServerPath}`);

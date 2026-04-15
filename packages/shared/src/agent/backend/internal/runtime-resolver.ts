@@ -31,11 +31,35 @@ export interface ResolvedBackendHostTooling {
   ripgrepPath?: string;
 }
 
+export function parseCommandLookupOutput(output: string): string[] {
+  return output
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+export function normalizeCommandLookupPath(commandName: string, candidate: string): string {
+  if (process.platform !== 'win32' || commandName !== 'bun') {
+    return candidate;
+  }
+
+  const bunExePath = join(dirname(candidate), 'node_modules', 'bun', 'bin', 'bun.exe');
+  return existsSync(bunExePath) ? bunExePath : candidate;
+}
+
 function firstExistingPath(candidates: string[]): string | undefined {
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
   return undefined;
+}
+
+function resolveSystemPath(commandName: string): string | undefined {
+  const whichCmd = process.platform === 'win32' ? 'where' : 'which';
+  const output = execFileSync(whichCmd, [commandName], { encoding: 'utf-8' });
+  return firstExistingPath(
+    parseCommandLookupOutput(output).map(candidate => normalizeCommandLookupPath(commandName, candidate)),
+  );
 }
 
 /**
@@ -67,8 +91,7 @@ function resolveBundledRuntimePath(hostRuntime: BackendHostRuntimeContext): stri
   // to avoid picking up an incompatible system install.
   if (!hostRuntime.isPackaged) {
     try {
-      const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-      const systemBun = execFileSync(whichCmd, ['bun'], { encoding: 'utf-8' }).trim();
+      const systemBun = resolveSystemPath('bun');
       if (systemBun && existsSync(systemBun)) return systemBun;
     } catch { /* system bun not found */ }
   }
@@ -180,8 +203,7 @@ function resolveRipgrepPath(hostRuntime: BackendHostRuntimeContext): string | un
   // to avoid picking up an incompatible system install.
   if (!hostRuntime.isPackaged) {
     try {
-      const whichCmd = process.platform === 'win32' ? 'where' : 'which';
-      const systemRg = execFileSync(whichCmd, ['rg'], { encoding: 'utf-8' }).trim();
+      const systemRg = resolveSystemPath('rg');
       if (systemRg && existsSync(systemRg)) return systemRg;
     } catch { /* system rg not found */ }
   }
@@ -191,6 +213,7 @@ function resolveRipgrepPath(hostRuntime: BackendHostRuntimeContext): string | un
 
 export function resolveBackendRuntimePaths(hostRuntime: BackendHostRuntimeContext): ResolvedBackendRuntimePaths {
   const bundledRuntimePath = hostRuntime.nodeRuntimePath || resolveBundledRuntimePath(hostRuntime);
+  const currentRuntimePath = process.versions?.bun ? process.execPath : undefined;
 
   return {
     claudeCliPath: resolveClaudeCliPath(hostRuntime),
@@ -200,7 +223,7 @@ export function resolveBackendRuntimePaths(hostRuntime: BackendHostRuntimeContex
     sessionServerPath: resolveServerPath(hostRuntime, 'session-mcp-server'),
     bridgeServerPath: resolveServerPath(hostRuntime, 'bridge-mcp-server'),
     piServerPath: resolveServerPath(hostRuntime, 'pi-agent-server'),
-    nodeRuntimePath: hostRuntime.nodeRuntimePath || bundledRuntimePath || process.execPath,
+    nodeRuntimePath: hostRuntime.nodeRuntimePath || bundledRuntimePath || currentRuntimePath,
     bundledRuntimePath,
   };
 }

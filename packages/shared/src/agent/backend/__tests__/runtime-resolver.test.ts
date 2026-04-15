@@ -9,7 +9,11 @@ import { describe, it, expect, afterEach } from 'bun:test';
 import { mkdirSync, writeFileSync, rmSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { resolveBackendRuntimePaths } from '../internal/runtime-resolver.ts';
+import {
+  normalizeCommandLookupPath,
+  parseCommandLookupOutput,
+  resolveBackendRuntimePaths,
+} from '../internal/runtime-resolver.ts';
 import { resolveBackendHostTooling } from '../factory.ts';
 import type { BackendHostRuntimeContext } from '../types.ts';
 
@@ -56,6 +60,78 @@ describe('resolveServerPath fallback', () => {
 
     const paths = resolveBackendRuntimePaths(hostRuntime);
     expect(paths.piServerPath).toBe(join(primaryDir, 'index.js'));
+  });
+});
+
+describe('parseCommandLookupOutput', () => {
+  it('splits Windows where output into clean candidate paths', () => {
+    const result = parseCommandLookupOutput(
+      'C:\\Users\\Admin\\AppData\\Roaming\\npm\\bun\r\nC:\\Users\\Admin\\AppData\\Roaming\\npm\\bun.cmd\r\n',
+    );
+
+    expect(result).toEqual([
+      'C:\\Users\\Admin\\AppData\\Roaming\\npm\\bun',
+      'C:\\Users\\Admin\\AppData\\Roaming\\npm\\bun.cmd',
+    ]);
+  });
+
+  it('drops blank lines and surrounding whitespace', () => {
+    const result = parseCommandLookupOutput('\n  /usr/local/bin/rg  \n\n /opt/homebrew/bin/rg \n');
+
+    expect(result).toEqual([
+      '/usr/local/bin/rg',
+      '/opt/homebrew/bin/rg',
+    ]);
+  });
+});
+
+describe('normalizeCommandLookupPath', () => {
+  const tmpBase = join(tmpdir(), `lookup-path-test-${Date.now()}`);
+
+  afterEach(() => {
+    try { rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+  });
+
+  it('resolves Windows npm bun shims to bun.exe when present', () => {
+    const shimDir = join(tmpBase, 'npm');
+    const shimPath = join(shimDir, process.platform === 'win32' ? 'bun.cmd' : 'bun');
+    const bunExePath = join(shimDir, 'node_modules', 'bun', 'bin', 'bun.exe');
+    mkdirSync(join(shimDir, 'node_modules', 'bun', 'bin'), { recursive: true });
+    writeFileSync(shimPath, '');
+    writeFileSync(bunExePath, '');
+
+    const result = normalizeCommandLookupPath('bun', shimPath);
+    expect(result).toBe(process.platform === 'win32' ? bunExePath : shimPath);
+  });
+});
+
+describe('resolveBackendRuntimePaths', () => {
+  const tmpBase = join(tmpdir(), `runtime-paths-test-${Date.now()}`);
+
+  afterEach(() => {
+    try { rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+  });
+
+  it('uses bundled bun runtime when present', () => {
+    const appRoot = join(tmpBase, 'bundled-runtime');
+    const bunBinary = process.platform === 'win32' ? 'bun.exe' : 'bun';
+    const bunDir = process.platform === 'win32'
+      ? join(appRoot, 'resources', 'vendor', 'bun')
+      : join(appRoot, 'vendor', 'bun');
+    const bunPath = join(bunDir, bunBinary);
+    mkdirSync(bunDir, { recursive: true });
+    writeFileSync(bunPath, '#!/bin/sh\n');
+    chmodSync(bunPath, 0o755);
+
+    const hostRuntime: BackendHostRuntimeContext = {
+      appRootPath: appRoot,
+      resourcesPath: join(appRoot, 'resources'),
+      isPackaged: false,
+    };
+
+    const paths = resolveBackendRuntimePaths(hostRuntime);
+    expect(paths.bundledRuntimePath).toBe(bunPath);
+    expect(paths.nodeRuntimePath).toBe(bunPath);
   });
 });
 
