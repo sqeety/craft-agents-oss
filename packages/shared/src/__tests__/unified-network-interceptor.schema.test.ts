@@ -6,12 +6,20 @@ import { homedir } from 'node:os';
 let injectMetadataIntoToolSchema: typeof import('../unified-network-interceptor.ts').injectMetadataIntoToolSchema;
 let sanitizeEmptyTextCacheControl: typeof import('../unified-network-interceptor.ts').sanitizeEmptyTextCacheControl;
 let upgradePromptCacheTtl: typeof import('../unified-network-interceptor.ts').upgradePromptCacheTtl;
+let getCurrentConversationIdentifier: typeof import('../unified-network-interceptor.ts').getCurrentConversationIdentifier;
+let applyOpenAiResponsesPromptCacheKey: typeof import('../unified-network-interceptor.ts').applyOpenAiResponsesPromptCacheKey;
 let _resetConfigCacheForTesting: typeof import('../interceptor-common.ts')._resetConfigCacheForTesting;
 
 describe('unified-network-interceptor schema metadata injection', () => {
   beforeAll(async () => {
     process.env.CRAFT_INTERCEPTOR_DISABLE_AUTO_INSTALL = '1';
-    ({ injectMetadataIntoToolSchema, sanitizeEmptyTextCacheControl, upgradePromptCacheTtl } = await import('../unified-network-interceptor.ts'));
+    ({
+      injectMetadataIntoToolSchema,
+      sanitizeEmptyTextCacheControl,
+      upgradePromptCacheTtl,
+      getCurrentConversationIdentifier,
+      applyOpenAiResponsesPromptCacheKey,
+    } = await import('../unified-network-interceptor.ts'));
     ({ _resetConfigCacheForTesting } = await import('../interceptor-common.ts'));
   });
 
@@ -54,6 +62,86 @@ describe('unified-network-interceptor schema metadata injection', () => {
     expect(result.required).toEqual(['_displayName', '_intent']);
     expect(result.properties._displayName).toEqual({ type: 'string', description: 'custom display name schema' });
     expect(result.properties._intent).toEqual({ type: 'string', description: 'custom intent schema' });
+  });
+});
+
+describe('getCurrentConversationIdentifier', () => {
+  const originalSessionId = process.env.CRAFT_SESSION_ID;
+  const originalSessionDir = process.env.CRAFT_SESSION_DIR;
+
+  afterEach(() => {
+    if (originalSessionId === undefined) {
+      delete process.env.CRAFT_SESSION_ID;
+    } else {
+      process.env.CRAFT_SESSION_ID = originalSessionId;
+    }
+
+    if (originalSessionDir === undefined) {
+      delete process.env.CRAFT_SESSION_DIR;
+    } else {
+      process.env.CRAFT_SESSION_DIR = originalSessionDir;
+    }
+  });
+
+  it('prefers explicit CRAFT_SESSION_ID', () => {
+    process.env.CRAFT_SESSION_ID = 'session-from-env';
+    process.env.CRAFT_SESSION_DIR = 'E:\\open\\craft-agents-oss\\sessions\\session-from-dir';
+
+    expect(getCurrentConversationIdentifier()).toBe('session-from-env');
+  });
+
+  it('falls back to the session directory basename', () => {
+    delete process.env.CRAFT_SESSION_ID;
+    process.env.CRAFT_SESSION_DIR = 'E:\\open\\craft-agents-oss\\sessions\\260415-steady-lake';
+
+    expect(getCurrentConversationIdentifier()).toBe('260415-steady-lake');
+  });
+
+  it('returns undefined when no session context is available', () => {
+    delete process.env.CRAFT_SESSION_ID;
+    delete process.env.CRAFT_SESSION_DIR;
+
+    expect(getCurrentConversationIdentifier()).toBeUndefined();
+  });
+});
+
+describe('applyOpenAiResponsesPromptCacheKey', () => {
+  const originalSessionId = process.env.CRAFT_SESSION_ID;
+  const originalSessionDir = process.env.CRAFT_SESSION_DIR;
+
+  afterEach(() => {
+    if (originalSessionId === undefined) {
+      delete process.env.CRAFT_SESSION_ID;
+    } else {
+      process.env.CRAFT_SESSION_ID = originalSessionId;
+    }
+
+    if (originalSessionDir === undefined) {
+      delete process.env.CRAFT_SESSION_DIR;
+    } else {
+      process.env.CRAFT_SESSION_DIR = originalSessionDir;
+    }
+  });
+
+  it('writes prompt_cache_key using the current conversation identifier', () => {
+    process.env.CRAFT_SESSION_ID = 'session-cache-key';
+    const body = { model: 'gpt-5', input: [] };
+
+    const result = applyOpenAiResponsesPromptCacheKey(body);
+
+    expect(result.prompt_cache_key).toBe('session-cache-key');
+    expect(body.prompt_cache_key).toBe('session-cache-key');
+  });
+
+  it('does not write prompt_cache_key when there is no session context', () => {
+    delete process.env.CRAFT_SESSION_ID;
+    delete process.env.CRAFT_SESSION_DIR;
+    const body = { model: 'gpt-5', input: [] };
+
+    const result = applyOpenAiResponsesPromptCacheKey(body);
+
+    expect(result.prompt_cache_key).toBeUndefined();
+    expect(body.prompt_cache_key).toBeUndefined();
   });
 });
 

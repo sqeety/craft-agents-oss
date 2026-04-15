@@ -30,6 +30,7 @@ import {
   displayNameSchema,
   intentSchema,
 } from './interceptor-common.ts';
+import { basename } from 'node:path';
 import { FEATURE_FLAGS } from './feature-flags.ts';
 import { resolveRequestContext } from './interceptor-request-utils.ts';
 
@@ -155,6 +156,35 @@ export function injectMetadataIntoToolSchema<T extends {
     properties: result.properties,
     required: result.required,
   };
+}
+
+/**
+ * Resolve the current conversation identifier for request-scoped features such
+ * as provider prompt caching. Prefer an explicit session ID when present, then
+ * fall back to the session directory name injected into SDK subprocesses.
+ */
+export function getCurrentConversationIdentifier(): string | undefined {
+  const explicitSessionId = process.env.CRAFT_SESSION_ID?.trim();
+  if (explicitSessionId) return explicitSessionId;
+
+  const sessionDir = process.env.CRAFT_SESSION_DIR?.trim();
+  if (!sessionDir) return undefined;
+
+  const sessionId = basename(sessionDir);
+  return sessionId || undefined;
+}
+
+/**
+ * Add a stable prompt cache key for OpenAI-compatible responses requests when
+ * the current conversation/session identifier is available.
+ */
+export function applyOpenAiResponsesPromptCacheKey(body: Record<string, unknown>): Record<string, unknown> {
+  const conversationId = getCurrentConversationIdentifier();
+  if (!conversationId) return body;
+
+  body.prompt_cache_key = conversationId;
+  debugLog(`[OpenAI Responses] Set prompt_cache_key=${conversationId}`);
+  return body;
 }
 
 /**
@@ -1274,6 +1304,10 @@ const openAiResponsesAdapter: ApiAdapter = {
   },
 
   stripsSseMetadata: true,
+
+  modifyRequest(_url: string, init: RequestInit, body: Record<string, unknown>): { init: RequestInit; body: Record<string, unknown> } {
+    return { init, body: applyOpenAiResponsesPromptCacheKey(body) };
+  },
 };
 
 // ============================================================================
